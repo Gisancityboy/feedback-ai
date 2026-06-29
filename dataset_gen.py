@@ -2,7 +2,6 @@ import numpy as np
 import os
 
 SAMPLE_RATE = 44100
-DURATION = 1.0
 SEGMENT_LENGTH = 1024
 
 def pink_noise(n):
@@ -23,23 +22,11 @@ def multi_reflection_filter(signal, n_reflections=4):
             output[delay:] += signal[:-delay] * decay
     return output
 
-def add_impulse(signal):
-    n_impulses = np.random.randint(0, 4)
-    for _ in range(n_impulses):
-        pos = np.random.randint(0, len(signal))
-        amp = np.random.uniform(0.1, 0.5)
-        width = np.random.randint(10, 100)
-        impulse = amp * np.exp(-np.arange(width) / (width * 0.2))
-        end = min(pos + width, len(signal))
-        signal[pos:end] += impulse[:end - pos]
-    return signal
-
-def simulate_feedback(gain, distance):
-    n_samples = int(SAMPLE_RATE * DURATION)
+def simulate_feedback(gain, distance, duration=3.0):
+    n_samples = int(SAMPLE_RATE * duration)
     delay_samples = int((distance / 343.0) * SAMPLE_RATE)
-
     output = np.zeros(n_samples)
-    t = np.linspace(0, DURATION, n_samples)
+    t = np.linspace(0, duration, n_samples)
 
     n_freqs = np.random.randint(3, 10)
     freqs = np.random.choice([80,120,180,250,350,500,700,1000,1500,2000,3000,4000,6000,8000], n_freqs, replace=False)
@@ -50,7 +37,6 @@ def simulate_feedback(gain, distance):
     envelope = np.interp(np.linspace(0, 19, n_samples), np.arange(20), envelope)
     input_signal *= envelope
     input_signal += pink_noise(n_samples) * np.random.uniform(0.05, 0.3)
-    input_signal = add_impulse(input_signal)
     input_signal *= 0.01
     input_signal = multi_reflection_filter(input_signal)
 
@@ -61,38 +47,54 @@ def simulate_feedback(gain, distance):
     return output
 
 def measure_energy_trend(signal):
-    # 신호를 4구간으로 나눠서 에너지 추세 측정
     n = len(signal)
-    q = n // 4
-    energies = [np.mean(signal[i*q:(i+1)*q] ** 2) for i in range(4)]
-    
-    # 선형 회귀로 에너지 증가율 계산
-    x = np.arange(4)
-    slope = np.polyfit(x, energies, 1)[0]
+    n_bins = 6
+    q = n // n_bins
+    energies = [np.mean(signal[i*q:(i+1)*q] ** 2) for i in range(n_bins)]
+    slope = np.polyfit(np.arange(n_bins), energies, 1)[0]
     mean_energy = np.mean(energies)
-    
-    if mean_energy > 0:
-        normalized_slope = slope / mean_energy  # 상대적 증가율
-    else:
-        normalized_slope = 0
-    
-    return normalized_slope, energies
+    return slope / mean_energy if mean_energy > 0 else 0
 
 def label_from_trend(slope):
-    # 게인/거리 상관없이 신호 자체 에너지 추세로 판단
-    if slope < -0.05:
-        return 0   # 안전 (에너지 감소 중)
-    elif slope < 0.15:
-        return 1   # 주의 (에너지 유지 또는 약간 증가)
+    if slope < -0.02:
+        return 0   # 안전
+    elif slope < 0.10:
+        return 1   # 주의
     else:
-        return 2   # 위험 (에너지 빠르게 증가 = 하울링 임박)
+        return 2   # 위험
+
+LPC_ORDER = 20
+
+def levinson_durbin(rxx, order):
+    # GLD.c의 Levinson-Durbin 재귀를 Python으로 구현
+    # rxx: 자기상관 배열 (lag 0부터 order까지)
+    # return: LPC 계수 배열 (order개)
+    a = np.zeros(order)
+    E = rxx[0]
+    for m in range(order):
+        if E < 1e-10:
+            break
+        k = -rxx[m + 1]
+        for i in range(m):
+            k -= a[i] * rxx[m - i]
+        k /= E
+        a_new = a.copy()
+        a_new[m] = k
+        for i in range(m):
+            a_new[i] = a[i] + k * a[m - 1 - i]
+        a = a_new
+        E *= (1 - k * k)
+    return a
 
 def extract_features(segment):
+    # 1024 샘플 세그먼트 → 537개 피처
+    # 1. FFT 스펙트럼 (513개)
     fft = np.abs(np.fft.rfft(segment))
     max_val = np.max(fft)
     if max_val > 0:
         fft = fft / max_val
 
+    # 2. 에너지 관련 (3개)
     half = len(segment) // 2
     e1 = np.mean(segment[:half] ** 2)
     e2 = np.mean(segment[half:] ** 2)
@@ -100,26 +102,43 @@ def extract_features(segment):
     peak = np.max(np.abs(segment))
     zcr = np.mean(np.abs(np.diff(np.sign(segment)))) / 2
 
-    return np.concatenate([fft, [energy_ratio, peak, zcr]])
+    # 3. 자기상관 (GLD의 rxx 개념) — 첫 20 lag 정규화 (20개)
+    autocorr = np.correlate(segment, segment, mode='full')
+    mid = len(autocorr) // 2
+    autocorr_lags = autocorr[mid:mid + LPC_ORDER + 1]
+    if autocorr_lags[0] > 0:
+        autocorr_lags = autocorr_lags / autocorr_lags[0]
 
-# 다양한 게인 + 거리 조합으로 데이터 생성
+    # 4. LPC 계수 (Levinson-Durbin, GLD 알고리즘 핵심) — 20개
+    lpc = levinson_durbin(autocorr_lags, LPC_ORDER)
+
+    # 5. 스펙트럼 평탄도 (1개) — 피드백시 특정 주파수 급격히 부각
+    fft_raw = np.abs(np.fft.rfft(segment)) + 1e-10
+    spectral_flatness = np.exp(np.mean(np.log(fft_raw))) / np.mean(fft_raw)
+
+    return np.concatenate([fft, [energy_ratio, peak, zcr],
+                           autocorr_lags[1:],  # lag 1~20 (20개)
+                           lpc,                # LPC 계수 20개
+                           [spectral_flatness]])  # 총 537개
+
 gains = np.arange(0.3, 1.2, 0.05)
 distances = [5, 8, 10, 15, 20]
-SAMPLES_PER_COMBO = 10
+SAMPLES_PER_COMBO = 15
 
 X = []
 y = []
-skipped = 0
 
 for gain in gains:
     for distance in distances:
         for _ in range(SAMPLES_PER_COMBO):
-            signal = simulate_feedback(gain, distance)
-            slope, _ = measure_energy_trend(signal)
+            # 3초 신호로 레이블 결정
+            long_signal = simulate_feedback(gain, distance, duration=3.0)
+            slope = measure_energy_trend(long_signal)
             label = label_from_trend(slope)
 
-            for start in range(0, len(signal) - SEGMENT_LENGTH, SEGMENT_LENGTH):
-                segment = signal[start:start + SEGMENT_LENGTH]
+            # 1024 샘플 세그먼트로 특징 추출
+            for start in range(0, len(long_signal) - SEGMENT_LENGTH, SEGMENT_LENGTH):
+                segment = long_signal[start:start + SEGMENT_LENGTH]
                 features = extract_features(segment)
                 X.append(features)
                 y.append(label)

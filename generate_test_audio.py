@@ -61,6 +61,6 @@ def generate_audio(gain, filename):
     wav.write(filename, SAMPLE_RATE, output_int)
     print(f'저장 완료: {filename} (게인: {gain})')
 
-generate_audio(0.6,  'test_safe.wav')
-generate_audio(0.88, 'test_caution.wav')
-generate_audio(1.03, 'test_danger.wav')
+generate_audio(0.4,  'test_safe.wav')
+generate_audio(0.75, 'test_caution.wav')
+generate_audio(1.05, 'test_danger.wav')

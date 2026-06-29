@@ -64,3 +64,27 @@ python predict_audio.py
 | Phase 1 | 시뮬레이션 환경 구축 + 데이터 생성 | ✅ 완료 |
 | Phase 2 | AI 모델 학습 + 오디오 파일 예측 검증 | ✅ 완료 |
 | Phase 3 | 실시간 마이크 연동 + DSP 제어 | 🔄 진행 예정 |
+
+---
+
+## 참고 자료 및 레퍼런스
+
+### 논문
+- **"Acoustic Howling Suppression with Neural Networks using Real-world Data"**  
+  Jonah Stein, Ryan Corey, Andrew Singer — University of Illinois Urbana-Champaign  
+  본 프로젝트의 신경망 기반 하울링 억제 접근법의 이론적 배경으로 참고.  
+  실제 공연 환경 데이터를 활용한 딥러닝 모델 설계 방식을 참조함.
+
+- **"Prediction Error Method based Adaptive Feedback Cancellation (PEM-AFC)"**  
+  보청기 분야에서 개발된 피드백 예측 기반 적응 필터 제어 기법.  
+  예측 오차를 최소화하는 적응 필터 구조를 본 프로젝트의 레이블링 전략 설계에 참조함.
+
+### 오픈소스 코드
+- **Acoustic Feedback Suppression (GLD 기반 AFC 구현)**  
+  [https://github.com/ReidRR92/Acoustic-Feedback-Suppression](https://github.com/ReidRR92/Acoustic-Feedback-Suppression)  
+  Generalized Levinson-Durbin (GLD) 알고리즘을 활용한 Android용 C 구현체.  
+  `dataset_gen.py`와 `predict_audio.py`의 `levinson_durbin()` 함수 및 자기상관 기반 피처 추출 방식이 이 코드의 `GLD.c`에서 영감을 받아 Python으로 재구현됨.  
+  구체적으로 참고한 부분:
+  - `pmxcorr()` → 자기상관(rxx) 계산 방식
+  - `GLD()` → Levinson-Durbin 재귀 알고리즘 구조
+  - `canceller()` → FIR 필터 적용 원리
