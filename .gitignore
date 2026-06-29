@@ -1,0 +1,8 @@
+feedback_model.pth
+data/
+feedback_simulation.png
+predict_result.png
+danger_score.png
+demo_result.png
+__pycache__/
+*.pyc
